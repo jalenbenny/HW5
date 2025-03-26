@@ -1,254 +1,390 @@
 /******************************************************************
  *
- *   YOUR NAME / SECTION NUMBER
+ *   BEN FLOWERS / COMP 272/400C 002
  *
- *   Note, additional comments provided throughout source code is
- *   for educational purposes.
+ *   Note, additional comments provided throughout this source code
+ *   is for educational purposes
  *
  ********************************************************************/
 
-import java.util.BitSet;
-import java.util.Random;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
-import java.security.SecureRandom;
 import java.lang.Math;
 
 
 /**
- * Bloom Filters
+ * Cuckoo Hashing Exercise
  *
- * A Bloom filter is an implementation of a set which allows a certain 
- * probability of 'false positives' when determining if a given object is 
- * a member of that set, in return for a reduction in the amount of memory 
- * required for the set. It effectively works as follows:
- *    1) We allocate 'm' bits to represent the set data.
- *    2) We provide a hash function, which, instead of a single hash code, 
-         produces'k' hash codes and sets those bits.
- *    3) To add an element to the set, we derive bit indexes from all 'k' 
-         hash codes and set those bits.
- *    4) To determine if an element is in the set, we again calculate the 
- *       corresponding hash codes and bit indexes, and say it is likely 
- *       present if and only if all corresponding bits are set.
+ * Cuckoo hashing is a scheme for resolving hash collisions of keys in
+ * a hashmap that maintains a worst-case constant lookup time, O(1).
+ * The name derives from the behavior of some species of cuckoo, where
+ * the cuckoo chick pushes the other eggs or young out of the nest when
+ * it hatches in a variation of the behavior referred to as brood
+ * parasitism; analogously, inserting a new key into a cuckoo hashing
+ * table may push an older key to a different location in the table.
  *
- * The margin of error (or false positive rate) thus comes from the fact 
- * that as we add more and more objects to the set, we increase the likelihood
- * of "accidentally" setting a combination of bits that corresponds to an 
- * element that isn't actually in the set. However, through tuning the bloom 
- * filter setup based on the expected data, we mathematically have control 
- * over the desired false positive probability rate that we want to received
- * based on probability theory.
+ * Constructor:
+ *    CuckooHash( size )  - Where size is the initial bucket size
+ *                          of the hashmap
  *
- * False Positive rate discussion:
- *
- * The Bloom filter performance changes as we change parameters discussed 
- * below with the class constructors. There are two key variables that impact 
- * the false positive rate:
- *     1) number of bits per item
- *     2) number of hash codes
- *
- * In other words, how many more bits are there in the filter than the 
- * maximum number of items we want to represent in the set, and hence the 
- * number of bits that we actually set for each element that we add to the 
- * set. The more bits we require to be marked as set to '1' in order to mark 
- * an element as 'present' - e.g., the more hash code per item - the lower the 
- * chance of false positives, because for a given element potentially in
- * the set, there's less chance of some random combination of bits from other 
- * elements also accidentally marking that element as present when it isn't.
- *
- * But, for a given bit filter size, there is a 'point of no return', at 
- * which having more hash codes simply means that we fill up the bit set too 
- * quickly as we add elements -- and hence get more false positives -- than 
- * with fewer hash codes.
- *
- * Based on this discussion, you can find many Bloom Filter calculators 
- * available online to determine how to adjust the variables inorder to 
- * achieve the desired probability of false positive rates that you can 
- * tolerate and/or desire for your application, e.g.,:
- *  - https://toolslick.com/programming/data-structure/bloom-filter-calculator
- *  - https://www.engineersedge.com/calculators/bloom_filter_calculator_15596.htm
- *  - https://www.di-mgt.com.au/bloom-calculator.html
- *  - https://programming.guide/bloom-filter-calculator.html
+ * Public Methods:
+ *    int     size()	   - The number of elements, <key,value> pairs,
+ *                           in the hashmap
+ *    void    clear()	   - Empty the hashmap.
+ *    List<V> values()     - Return a List of all values of type 'V' in
+ *                           the hashmap.
+ *    Set<K>  keys() 	   - Return a Set of all keys of type 'K" in
+ *                           the hashmap.
+ *    void    put(K,V)	   - Insert the <key,value> pair of types K and V.
+ *    V       get(K)	   - Return the value of type V for the key
+ *                           provided of type K.
+ *    boolean remove(K, V) - Remove  <key, value> pair, return true
+ *                           if found and removed, else false.
+ *    String printTable()  - Return a String representing a
+ *                           concatenation of all <key,value> pairs.
  */
 
-class BloomFilter {
-    private static final int MAX_HASHES = 8;
-    private static final long[] byteTable;
-    private static final long HSTART = 0xBB40E64DA205B064L;
-    private static final long HMULT = 7664345821815920749L;
+@SuppressWarnings("unchecked")
+public class CuckooHash<K, V> {
 
-    /*
-     * Hash provision code provided below:
+    private int CAPACITY;  					// Hashmap capacity
+    private Bucket<K, V>[] table;			// Hashmap table
+    private int a = 37, b = 17;				// Constants used in h2(key)
+
+
+    /**
+     * Class Bucket
      *
-     * The following methods implement a strong 64-bit hash function, which
-     * produces a good dispersal. In other words, given a random set of
-     * elements to hash, there is a high chance that our hash function will
-     * produce corresponding hash codes that are well dispersed over the
-     * possible range of hash codes. Hence:
-     *    1) whatever the size of the hash table, the number of collisions will
-     *       be close to the number that we would "theoretically" expect;
-     *    2) for a given hash code width (i.e. the number of bits in the hash
-     *       code), we can predict how likely it is for the above-mentioned goal
-     *       to be met; e.g. given a typical random selection of element, for
-     *       each element to be given a unique hash code.
+     * Inner bucket class which represents a <key,value> pair
+     * within the hash map.
      *
-     * Additional discussion on hash implementation:
-     *
-     * Notice that Java's hash table implementation — and hence implementations
-     * of hashCode() — don't require the goals above to be met. Java maps and 
-     * sets, rather than storing just the hash code, store the actual key object.
-     * This means that implementations of hashCode() generally only need to
-     * be "fairly good". It isn't the end of the world if two key objects have
-     * the same hash function, because the keys themselves are also compared in
-     * deciding if a match has been found.
-     *
-     * Below implements a 64-bit Linear Congruential Generator (LCG). It uses 
-     * a table of 256 random values indexed by successive bytes in the data, 
-     * and recommends a multiple suitable for an LCG with a modulus of 2^64,
-     * which is effectively what we have when we multiple using 64-bit long.
-     *
-     * The value of HMULT is found to be a good practice with 64-bit LCG. It 
-     * has roughly half of its bits set and is 'virtually' prime (it is 
-     * composed of three prime factors). The value of HSTART is arbitrary, 
-     * essentially any value would do.
-     *
-     * Fore more information:
-     *      Read about 'Linear Congruential Generators' (LCG) in the Literature.
+     * @param <K> - type of key
+     * @param <V> - type of value
      */
 
-    static {
-        byteTable = new long[256 * MAX_HASHES];
-        long h = 0x544B2FBACAAF1684L;
-        for (int i = 0; i < byteTable.length; i++) {
-            for (int j = 0; j < 31; j++)
-                h = (h >>> 7) ^ h; h = (h << 11) ^ h; h = (h >>> 10) ^ h;
-            byteTable[i] = h;
+    private class Bucket<K, V> {
+        private K bucKey = null;
+        private V value = null;
+
+        public Bucket(K k, V v) {
+            bucKey = k;
+            value = v;
         }
-    }
 
-    private long hashCode(String s, int hcNo) {
-        long h = HSTART;
-        final long hmult = HMULT;
-        final long[] ht = byteTable;
-        int startIx = 256 * hcNo;
-        for (int len = s.length(), i = 0; i < len; i++) {
-            char ch = s.charAt(i);
-            h = (h * hmult) ^ ht[startIx + (ch & 0xff)];
-            h = (h * hmult) ^ ht[startIx + ((ch >>> 8) & 0xff)];
+        /*
+         * Getters and Setters
+         */
+        private K getBucKey() {
+            return bucKey;
         }
-        return h;
-    }
+        private V getValue()  { return value;  }
 
-    private final BitSet data;          // The hash bit map
-    private final int noHashes;         // number of hashes
-    private final int hashMask;         // hash mask
-
-
-    /*
-     * Constructors discussion:
-     *
-     *   1) The first constructor will take as the first parameter the
-     *      base 2 logarithm of the number of bits, so passing an
-     *      example of 16, gives you a bloom filter of size 2^16. The
-     *      second parameter is the number of hash functions to use.
-     *
-     *   2) On the second constructor, consider that we can calculate
-     *      bit indexes from hash codes simply by ANDing with the mask. In
-     *      actual practice, we may not want to have to pass in the logarithm
-     *      of the number of bits, so we also provide a constructor that
-     *      in effect calculates the required value from a maximum number of
-     *      items and a number of bits per item.
-     */
-
-    public BloomFilter(int log2noBits, int noHashes) {
-        if (log2noBits < 1 || log2noBits > 31)
-            throw new IllegalArgumentException("Invalid number of bits");
-        if (noHashes < 1 || noHashes > MAX_HASHES)
-            throw new IllegalArgumentException("Invalid number of hashes");
-
-        this.data = new BitSet(1 << log2noBits);
-        this.noHashes = noHashes;
-        this.hashMask = (1 << log2noBits) - 1;
-    }
-
-    public BloomFilter(int noItems, int bitsPerItem, int noHashes) {
-        int bitsRequired = noItems * bitsPerItem;
-        if (bitsRequired >= Integer.MAX_VALUE) {
-            throw new IllegalArgumentException("Bloom filter would be too big");
-        }
-        int logBits = 4;
-        while ((1 << logBits) < bitsRequired)
-            logBits++;
-        if (noHashes < 1 || noHashes > MAX_HASHES)
-            throw new IllegalArgumentException("Invalid number of hashes");
-        this.data = new BitSet(1 << logBits);
-        this.noHashes = noHashes;
-        this.hashMask = (1 << logBits) - 1;
     }
 
 
     /*
-     * Method add
+     * Hash functions, hash1 and hash2
+     */
+    private int hash1(K key) 	{ return Math.abs(key.hashCode()) % CAPACITY; }
+    private int hash2(K key) 	{ return (a * b + Math.abs(key.hashCode())) % CAPACITY; }
+
+
+    /**
+     * Method CuckooHash
      *
-     * The method will set the bits in the bloom filter map for each of the 'k'
-     * hash codes based on the passed String being added to the set.
+     * Constructor that initializes and sets the hashmap. A future
+     * optimization would to pass a load factor limit as a target in
+     * maintaining the hashmap before reaching the point where we have
+     * a cycle causing occurring loop.
      *
-     * @param String - the value to add the to set
+     * @param size user input multimap capacity
      */
 
-    public void add(String s) {
-        for (int n = 0; n < noHashes; n++) {
-            long hc = hashCode(s, n);
-            int bitNo = (int) (hc) & this.hashMask;
-            data.set(bitNo);
-        }
+    public CuckooHash(int size) {
+        CAPACITY = size;
+        table = new Bucket[CAPACITY];
     }
 
 
-    /*
-     * Method contains
+    /**
+     * Method size
      *
-     * The method will check the bits in the bloom filter map for each
-     * of the 'k' hash codes based on the passed in parameter. It returns
-     * false if not in the set, else true if most probably in the set.
+     * Get the number of elements in the table; the time complexity is O(n).
      *
-     * @param boolean - false if not in set, else true for most probably in set
+     * @return total key-value pairs
      */
 
-    public boolean contains(String s) {
+    public int size() {
+        int count = 0;
+        for (int i=0; i<CAPACITY; ++i) {
+            if (table[i] != null)
+                count++;
+        }
+        return count;
+    }
 
-        // ADD YOUR CODE HERE - DO NOT FORGET TO ADD YOUR NAME AT TOP OF FILE
-        //
-        // HINT: the bitmap is the private class variable 'data', and it is
-        // of type BitSet (Java class BitSet). See Oracle documentation for
-        // this class on available methods. You can also see how method 'add'
-        // in this class uses the object.
 
+    /**
+     * Method clear
+     *
+     * Removes all elements in the table, it does not rest the size of
+     * the hashmap. Optionally, we could reset the CAPACITY to its
+     * initial value when the object was instantiated.
+     */
+
+    public void clear() {
+        table = new Bucket[CAPACITY];
+    }
+
+    public int mapSize() { return CAPACITY; }    // used in external testing only
+
+
+    /**
+     * Method values
+     *
+     * Get a list containing of all values in the table
+     *
+     * @return the values as a list
+     */
+
+    public List<V> values() {
+        List<V> allValues = new ArrayList<V>();
+        for (int i=0; i<CAPACITY; ++i) {
+            if (table[i] != null) {
+                allValues.add(table[i].getValue());
+            }
+        }
+        return allValues;
+    }
+
+
+    /**
+     * Method keys
+     *
+     * Get a set containing all the keys in the table
+     *
+     * @return a set of keys
+     */
+
+    public Set<K> keys() {
+        Set<K> allKeys = new HashSet<K>();
+        for (int i=0; i<CAPACITY; ++i) {
+            if (table[i] != null) {
+                allKeys.add(table[i].getBucKey());
+            }
+        }
+        return allKeys;
+    }
+
+
+    /**
+     * Method put
+     *
+     * Adds a key-value pair to the table by means of cuckoo hashing.
+     * Each element can only be inserted into one of two bucket locations,
+     * defined by the two separate hash functions, h1(key) or h2(key).
+     * Each element's initial location will always be defined
+     * by h1(key). If later it is kicked out of that bucket location by
+     * another element insertion, it will move back and forth between those
+     *  two hash locations (aka, bucket locations).
+     *
+     * On its initial invocation, this method places the passed <key,value>
+     * element at its h1(key) bucket location. If an element is already located
+     * at that bucket location, it will be kicked out and moved to its secondary
+     * location in order to make room for this initially inserted element. The
+     * secondary location is defined by the kicked out key's alternative hash
+     * function (aka, either h1(key) or h2(key), whichever is the one that moves
+     * to the alternate location.
+     *
+     * This process will continue in a loop as it moves kicked out
+     * elements to their alternate location (defined by h1(key) and h2(key))
+     * until either:
+     *         (1) an empty bucket is found, or
+     *         (2) we reach 'n' iterations, where 'n' is the bucket capacity
+     *             of the hashmap (see HINT below on this method of cycle
+     *             detection, the bucket capacity is held in variable 'CAPACITY').
+     *
+     * If we reach 'n' shuffles of elements being kicked out and moved to their
+     * secondary locations (leading to what appears to be a cycle), we will grow
+     * the hashmap and rehash (via method rehash()). After the rehash, we will
+     * need to re-invoke this method recursively, as we will have one element that
+     * was kicked out after the 'n' iteration that still needs to be inserted. Note,
+     * that it is possible when the bucket lists is small, that we may need to rehash
+     * twice to break a cycle. Again, this is done automatically when calling this
+     * method recursively.
+     *
+     * MAKE SURE YOU UNDERSTAND THE HINTS:
+     *
+     * HINT 1: To make sure you pass the provided tests in main, follow this rule:
+     *          - Given a <key, value> via method's invocation, the bucket it
+     *            determined by hashing the 'key'
+     *          - Normally, we would not allow dupe keys, for our purposes here we
+     *            WILL allow. What will be unique in this assignment's implementation
+     *            is the <key,value> in the table. So when inserting a key that is
+     *            already in the table, continue unless a dupe key has the same
+     *            value as being inserted.
+     *
+     *      The above is being done to make testing easy on causing cycles with minimal
+     *      insertions into the hash table.
+     *
+     * HINT 2: For simplicity of this assignment, after shuffling elements between
+     * buckets 'n' times (where 'n' is defined by the value of variable 'CAPACITY',
+     * you can assume you are in an infinite cycle. This may not be true, but if
+     * growing the hash map when not in a cycle, this will not cause data integrity
+     * issues. BUT BE CLEAR IN PRACTICE, as we discussed in class, a better way to
+     * do this is to build a graph (one edge at a time) for each element shuffled
+     * (and edge being defined as with end-points of the two bucket locations for the
+     * moved element). This once a cycle is detected in this graph, which is by starting
+     * to traverse an existing edge in the graph, we have a cycle. However, we have not
+     * discussed graphs yet, they are at the end of the semester :-)
+     *
+     * @param key the key of the element to add
+     * @param value the value of the element to add
+     */
+
+    public void put(K key, V value) {
+
+        // ADD YOUR CODE HERE - DO NOT FORGET TO ADD YOUR NAME AT TOP OF FILE.
+        // Also make sure you read this method's prologue above, it should help
+        // you. Especially the two HINTS in the prologue.
+
+        for (int i = 0; i < CAPACITY; i++) {
+            if (table[i] != null &&
+                    table[i].getBucKey().equals(key) &&
+                    table[i].getValue().equals(value)) {
+                // if exact <key, value> pair already exists, do nothing
+                return;
+            }
+        }
+
+        // initial insertion at h1(key)
+        int pos = hash1(key);
+        Bucket<K, V> newBucket = new Bucket<>(key, value);
+
+        // track number of iterations to detect potential cycles
+        for (int iterations = 0; iterations < CAPACITY; iterations++) {
+            // if the current position is empty, insert and return
+            if (table[pos] == null) {
+                table[pos] = newBucket;
+                return;
+            }
+
+            //  swap the new bucket with the existing one (otherwise)
+            Bucket<K, V> existingBucket = table[pos];
+            table[pos] = newBucket;
+            newBucket = existingBucket;
+
+            // switch between hash1 and hash2 for next position
+            pos = (pos == hash1(newBucket.getBucKey()))
+                    ? hash2(newBucket.getBucKey())
+                    : hash1(newBucket.getBucKey());
+        }
+
+        // if reached CAPACITY iterations, we have a cycle
+        // rehash and recursively try to insert the last bucket that was kicked out
+        rehash();
+        put(newBucket.getBucKey(), newBucket.getValue());
+    }
+
+
+    /**
+     * Method get
+     *
+     * Retrieve a value in O(1) time based on the key because it can only
+     * be in 1 of 2 locations
+     *
+     * @param key Key to search for
+     * @return the found value or null if it doesn't exist
+     */
+
+    public V get(K key) {
+        int pos1 = hash1(key);
+        int pos2 = hash2(key);
+        if (table[pos1] != null && table[pos1].getBucKey().equals(key))
+            return table[pos1].getValue();
+        else if (table[pos2] != null && table[pos2].getBucKey().equals(key))
+            return table[pos2].getValue();
+        return null;
+    }
+
+
+    /**
+     * Method remove
+     *
+     * Removes this key value pair from the table. Its time complexity
+     * is O(1) because the key can only be in 1 of 2 locations.
+     *
+     * @param key the key to remove
+     * @param value the value to remove
+     * @return successful removal
+     */
+    public boolean remove(K key, V value) {
+        int pos1 = hash1(key);
+        int pos2 = hash2(key);
+        if (table[pos1] != null && table[pos1].getValue().equals(value)) {
+            table[pos1] = null;
+            return true;
+        }
+        else if (table[pos2] != null && table[pos2].getValue().equals(value)) {
+            table[pos2] = null;
+            return true;
+        }
         return false;
     }
 
 
-    /*********************************
+    /**
+     * Method printTable
      *
-     * Method randomString
+     * The method will prepare a String representation of the table of
+     * the format
+     *      [ <k1, v1> <k2. v2> ... <kn, vn> ]
+     * where n is the number of <key, value> pairs.
      *
-     * This static method is used by the main routine for testing purposes.
-     * It generates random strings for entering into our Bloom filter hash map.
-     *
-     *********************************/
+     * @return the table's contents as a String
+     */
 
-    public static final String LETTERS =
-            "abcdefghijklmnopqrstuvexyABCDEFGHIJKLMNOPQRSTUVWYXZzéèêàôû";
-    public static String randomString(Random r) {
-        int wordLen;
-        do {
-            wordLen = 5 + 2 * (int) (r.nextGaussian() + 0.5d);
-        } while (wordLen < 1 || wordLen > 12);
-        StringBuilder sb = new StringBuilder(wordLen);
-        for (int i = 0; i < wordLen; i++) {
-            char ch = LETTERS.charAt(r.nextInt(LETTERS.length()));
-            sb.append(ch);
+    public String printTable() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("[ ");
+        for (int i=0; i<CAPACITY; ++i) {
+            if (table[i] != null) {
+                sb.append("<");
+                sb.append(table[i].getBucKey()); //key
+                sb.append(", ");
+                sb.append(table[i].getValue()); //value
+                sb.append("> ");
+            }
         }
-        return new String(sb);
+        sb.append("]");
+        return sb.toString();
     }
+
+
+    /**
+     * Method rehash
+     *
+     * This method regrows the hashtable to capacity: 2*old capacity + 1
+     * and reinserts (rehashes) all the <key,value> pairs.
+     *
+     * This method invokes the 'put' method, so it is possible that
+     * another cycle is found when rehashing the hashmap. If this occurs,
+     * this function can be invoked recursively via the 'put' method.
+     */
+
+    private void rehash() {
+        Bucket<K, V>[] tableCopy = table.clone();
+        int OLD_CAPACITY = CAPACITY;
+        CAPACITY = (CAPACITY * 2) + 1;
+        table = new Bucket[CAPACITY];
+
+        for (int i=0; i<OLD_CAPACITY; ++i) {
+            if (tableCopy[i] != null) {
+                put(tableCopy[i].getBucKey(), tableCopy[i].getValue());
+            }
+        }
+    }
+
 }
