@@ -224,10 +224,11 @@ class BloomFilter {
         // this class on available methods. You can also see how method 'add'
         // in this class uses the object.
 
+     // iterate through hash functions
         for (int n = 0; n < noHashes; n++) {
             long hc = hashCode(s,n);
-            int bitNo = (int) (hc) & this.hashMask;
-            if (!data.get(bitNo)) {
+            int bitNo = (int) (hc) & this.hashMask; // map hash code to valid bit 
+            if (!data.get(bitNo)) { // check if corresponding bit in the bitset is not set
                 return false;
             }
         }
